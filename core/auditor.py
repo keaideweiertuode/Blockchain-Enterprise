@@ -8,9 +8,15 @@ class EnterpriseAuditor:
         self.db_path = db_path
         self.crypto = crypto_engine
 
+    def _get_conn(self):
+        """获取数据库连接并开启 WAL 模式"""
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        return conn
+
     def run_full_audit(self) -> List[Dict]:
         """执行全账本深度审计"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
         c.execute("SELECT * FROM records ORDER BY id ASC")

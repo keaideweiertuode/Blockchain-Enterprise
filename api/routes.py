@@ -220,6 +220,7 @@ def register_routes(app, ledger, crypto, auditor, auth, config):
     def export_csv():
         import sqlite3
         conn = sqlite3.connect(DB_PATH)
+        conn.execute("PRAGMA journal_mode=WAL;")
         c = conn.cursor()
         c.execute("SELECT * FROM records ORDER BY id ASC")
         rows = c.fetchall()

@@ -13,9 +13,15 @@ class EnterpriseLedger:
         os.makedirs(self.image_dir, exist_ok=True)
         self.init_auth_db() # 确保用户表存在
 
+    def _get_conn(self):
+        """获取数据库连接并开启 WAL 模式"""
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        return conn
+
     def init_auth_db(self):
         """初始化用户与权限管理表"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         c = conn.cursor()
         c.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -55,7 +61,7 @@ class EnterpriseLedger:
         return self._calculate_merkle_root(new_level)
 
     def get_last_hash(self) -> str:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         c = conn.cursor()
         c.execute("SELECT record_hash FROM records ORDER BY id DESC LIMIT 1")
         last_record = c.fetchone()
@@ -63,7 +69,7 @@ class EnterpriseLedger:
         return last_record[0] if last_record else "GENESIS_BLOCK"
 
     def get_records(self, search_query="", category_filter="", page=1, per_page=10):
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
         query = "SELECT * FROM records WHERE category != 'SYSTEM'"
@@ -95,7 +101,7 @@ class EnterpriseLedger:
         return rows, total_pages
 
     def get_categories(self) -> List[str]:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         c = conn.cursor()
         c.execute("SELECT DISTINCT category FROM records WHERE category IS NOT NULL AND category != 'SYSTEM'")
         categories = [row[0] for row in c.fetchall()]
@@ -103,7 +109,7 @@ class EnterpriseLedger:
         return categories
 
     def get_dashboard_stats(self) -> dict:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
         c.execute("SELECT note FROM records WHERE category = 'SYSTEM' AND item_name = 'STATUS_UPDATE'")
@@ -126,7 +132,7 @@ class EnterpriseLedger:
         }
 
     def add_asset_record(self, crypto_engine, **kwargs) -> str:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         c = conn.cursor()
         previous_hash = self.get_last_hash()
         

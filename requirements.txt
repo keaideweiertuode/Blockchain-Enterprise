@@ -1,7 +1,8 @@
 # Blockchain Enterprise 核心依赖清单
 
-# Web 框架与路由
+# Web 框架与服务器
 flask
+gunicorn
 
 # 密码学与安全
 pynacl
