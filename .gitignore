@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# Project Specific
+database/*.db
+images/
+uploads/
+storage/*.log
+storage/audit_history/
+
+# Security (CRITICAL)
+keys/private.key
+.env
+
+# OS
+.DS_Store
+.vscode/

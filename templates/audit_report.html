@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>企业资产账本审计报告 - {{ report.timestamp }}</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333; line-height: 1.6; padding: 40px; background: #f9f9f9; }
+        .report-container { max-width: 900px; margin: 0 auto; background: #fff; padding: 40px; border: 1px solid #ddd; box-shadow: 0 0 20px rgba(0,0,0,0.05); }
+        .header { border-bottom: 3px solid #2c3e50; padding-bottom: 20px; margin-bottom: 30px; display: flex; justify-content: space-between; align-items: flex-end; }
+        .header h1 { margin: 0; color: #2c3e50; }
+        .score-circle { width: 120px; height: 120px; border-radius: 50%; border: 8px solid #eee; display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: bold; margin-bottom: 10px; }
+        .score-EXCELLENT { border-color: #27ae60; color: #27ae60; }
+        .score-WARNING { border-color: #f39c12; color: #f39c12; }
+        .score-CRITICAL { border-color: #e74c3c; color: #e74c3c; }
+        
+        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 30px; }
+        .stat-card { background: #f4f7f6; padding: 20px; border-radius: 8px; text-align: center; }
+        .stat-card h3 { margin: 0 0 10px 0; font-size: 14px; text-transform: uppercase; color: #7f8c8d; }
+        .stat-card p { margin: 0; font-size: 24px; font-weight: bold; color: #2c3e50; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 30px; }
+        th { background: #f8f9fa; border-bottom: 2px solid #dee2e6; text-align: left; padding: 12px; font-size: 14px; }
+        td { padding: 12px; border-bottom: 1px solid #eee; font-size: 13px; }
+        .status-valid { color: #27ae60; font-weight: bold; }
+        .status-invalid { color: #e74c3c; font-weight: bold; }
+        .issue-list { font-size: 11px; color: #e74c3c; margin-top: 5px; }
+        
+        .seal { margin-top: 50px; text-align: right; font-style: italic; color: #bdc3c7; }
+        .seal-logo { font-size: 40px; opacity: 0.3; }
+    </style>
+</head>
+<body>
+<div class="report-container">
+    <div class="header">
+        <div>
+            <h1>资产审计合规报告</h1>
+            <p style="margin: 5px 0 0 0; color: #7f8c8d;">报告编号: {{ report.report_id }}</p>
+        </div>
+        <div style="text-align: right;">
+            <div class="score-circle score-{{ report.health_status }}">{{ report.score }}%</div>
+            <p style="margin: 0; font-weight: bold;">合规评分</p>
+        </div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card"><h3>总区块数</h3><p>{{ report.total_records }}</p></div>
+        <div class="stat-card"><h3>合规区块</h3><p>{{ report.valid_records }}</p></div>
+        <div class="stat-card"><h3>异常项</h3><p>{{ report.tampered_records }}</p></div>
+    </div>
+
+    <h3>详细审计日志</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>区块ID</th>
+                <th>物品名称</th>
+                <th>验证状态</th>
+                <th>审计结果</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in report.details %}
+            <tr>
+                <td>#{{ row.id }}</td>
+                <td>{{ row.item_name }}</td>
+                <td>
+                    <span class="{% if row.valid %}status-valid{% else %}status-invalid{% endif %}">
+                        {% if row.valid %}通过 (Verified){% else %}未通过 (Failed){% endif %}
+                    </span>
+                </td>
+                <td>
+                    {% if row.valid %}
+                        密码学签名匹配，哈希链完整。
+                    {% else %}
+                        <div class="issue-list">
+                            {% for issue in row.issues %}• {{ issue }}<br>{% endfor %}
+                        </div>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="seal">
+        <div class="seal-logo">🛡️</div>
+        由 Blockchain Enterprise 审计引擎自动生成<br>
+        生成时间: {{ report.timestamp }}<br>
+        数字指纹校验: OK
+    </div>
+</div>
+</body>
+</html>

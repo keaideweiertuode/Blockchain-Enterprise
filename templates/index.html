@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blockchain Item Ledger v0.4</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <style>
+        /* ==========================================
+           🎨 自定义背景与全局排版
+           ========================================== */
+        body { 
+            background-image: url('/static/carbon_fibre.png'); 
+            background-size: auto;       /* 原尺寸平铺 */
+            background-repeat: repeat;   /* 开启拼图效果 */
+            background-attachment: scroll; 
+            background-position: center top;
+            background-color: #f0f2f5; 
+            min-height: 100vh;
+        }
+
+        /* 🔮 毛玻璃质感卡片 (Glassmorphism) */
+        .glass-card {
+            background: rgba(255, 255, 255, 0.85); 
+            backdrop-filter: blur(16px);           
+            -webkit-backdrop-filter: blur(16px);   
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+            border-radius: 12px;
+        }
+
+        .hash-text { font-family: monospace; font-size: 0.85em; color: #6c757d; word-break: break-all; }
+        .blockchain-link { text-align: center; color: rgba(0,0,0,0.2); margin: -10px 0; font-size: 1.5rem; }
+        
+        .item-consumed { opacity: 0.7; background: rgba(230, 230, 230, 0.7) !important; }
+        .img-consumed { filter: grayscale(100%); }
+
+        /* ==========================================
+           🖼️ 轮播图与图片点击交互
+           ========================================== */
+        .carousel-item img {
+            width: 100px;
+            height: 100px;
+            object-fit: cover;
+            border-radius: 8px;
+            cursor: pointer; /* 鼠标悬浮变小手，暗示可点击 */
+            transition: transform 0.2s ease;
+        }
+        .carousel-item img:hover {
+            transform: scale(1.05); /* 悬浮时轻微放大 */
+        }
+
+        /* ==========================================
+           📱 手机端 (Mobile) 专属自适应优化
+           ========================================== */
+        @media (max-width: 576px) {
+            .item-card-body { flex-direction: column !important; }
+            .carousel-item img {
+                width: 100%;       
+                height: 200px;     
+                margin-bottom: 15px;
+            }
+            .action-buttons { flex-direction: column; width: 100%; }
+            .action-buttons .btn { width: 100%; margin-bottom: 8px; }
+            .page-title-section { text-align: center; margin-bottom: 15px; }
+            .top-actions { justify-content: center !important; }
+        }
+    </style>
+</head>
+<body>
+<div class="container py-4">
+    
+    <div class="row mb-3 align-items-center">
+        <div class="col-md-5 page-title-section">
+            <h2 class="fw-bold text-dark mb-0" style="text-shadow: 0 2px 4px rgba(255,255,255,0.8);">🛡️ 企业资产审计平台</h2>
+            <p class="text-muted small mb-0">当前登录: <strong>{{ user.full_name }}</strong> ({{ user.role }}) | <a href="/logout" class="text-danger text-decoration-none">退出登录</a></p>
+        </div>
+        <div class="col-md-7 d-flex flex-wrap gap-2 justify-content-md-end top-actions mt-3 mt-md-0">
+            {% if user.role == 'SUPER_ADMIN' %}
+            <a href="/admin/users" class="btn btn-dark shadow-sm fw-bold">👥 用户管理</a>
+            {% endif %}
+            <button class="btn btn-info shadow-sm text-white fw-bold" data-bs-toggle="modal" data-bs-target="#qrScannerModal">📷 扫码识别</button>
+            <a href="/export" class="btn btn-success shadow-sm fw-bold">📊 导出报表</a>
+            {% if user.role in ['SUPER_ADMIN', 'AUDITOR'] %}
+            <a href="/audit/report" target="_blank" class="btn btn-primary shadow-sm fw-bold">📜 审计报告</a>
+            <a href="/verify_chain" class="btn btn-warning shadow-sm fw-bold">🛡️ 全链校验</a>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="row mb-4">
+        <div class="col-12 col-md-6">
+            <div class="card glass-card border-0" style="background: rgba(33, 37, 41, 0.85); color: white;">
+                <div class="card-body py-3 d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="mb-0" style="color: #adb5bd;">Active Assets Value</h6>
+                        <h3 class="mb-0 fw-bold text-white">¥{{ "%.2f"|format(dash_data.total_value) }}</h3>
+                    </div>
+                    <div class="text-end">
+                        <h6 class="mb-0" style="color: #adb5bd;">Active Items</h6>
+                        <h3 class="mb-0 fw-bold text-white">{{ dash_data.total_items }}</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }} alert-dismissible fade show glass-card border-0" role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="row">
+        <div class="col-12 col-md-4 mb-4">
+            {% if user.role in ['SUPER_ADMIN', 'MANAGER'] %}
+            <div class="d-md-none mb-3">
+                <button class="btn btn-primary w-100 fw-bold py-2 shadow-sm" type="button" data-bs-toggle="collapse" data-bs-target="#addFormCollapse">
+                    ➕ 登记新资产 (展开表单)
+                </button>
+            </div>
+            
+            <div class="collapse d-md-block" id="addFormCollapse">
+                <div class="card glass-card border-0 position-sticky" style="top: 20px;">
+                    <div class="card-header bg-transparent border-bottom d-flex justify-content-between align-items-center">
+                        <span class="fw-bold">➕ 资产上链登记</span>
+                        {% if crypto_can_sign %}
+                        <span class="badge bg-success">已解锁 (Key Online)</span>
+                        {% else %}
+                        <span class="badge bg-secondary">已锁定 (Key Offline)</span>
+                        {% endif %}
+                    </div>
+                    <div class="card-body">
+                        {% if not crypto_can_sign %}
+                        <div class="alert alert-light border text-center py-3">
+                            <p class="small text-muted mb-2">当前处于[离线冷钱包]模式，签名私钥未识别。</p>
+                            <form action="/admin/crypto/reload" method="POST">
+                                <button type="submit" class="btn btn-sm btn-outline-primary">🔌 识别并加载物理钥匙</button>
+                            </form>
+                        </div>
+                        {% endif %}
+                        <form action="/add" method="POST" enctype="multipart/form-data" {% if not crypto_can_sign %}style="opacity: 0.5; pointer-events: none;"{% endif %}>
+                            <div class="mb-3"><label class="form-label text-muted small fw-bold mb-1">图片 (按住Ctrl可多选)</label><input type="file" class="form-control bg-light border-0" name="images" accept="image/*" multiple required></div>
+                            <div class="mb-3"><label class="form-label text-muted small fw-bold mb-1">类目</label><input type="text" class="form-control bg-light border-0" name="category" required></div>
+                            <div class="mb-3"><label class="form-label text-muted small fw-bold mb-1">物品名称</label><input type="text" class="form-control bg-light border-0" name="name" required></div>
+                            <div class="row mb-3 g-2">
+                                <div class="col-6"><label class="form-label text-muted small fw-bold mb-1">数量</label><input type="number" class="form-control bg-light border-0" name="quantity" required></div>
+                                <div class="col-6"><label class="form-label text-muted small fw-bold mb-1">价格</label><input type="number" step="0.01" class="form-control bg-light border-0" name="price" required></div>
+                            </div>
+                            <div class="mb-3"><label class="form-label text-muted small fw-bold mb-1">空间位置 (如: A区3号架)</label><input type="text" class="form-control bg-light border-0" name="location"></div>
+                            <div class="row mb-3 g-2">
+                                <div class="col-6"><label class="form-label text-muted small fw-bold mb-1">过保日期</label><input type="date" class="form-control bg-light border-0" name="warranty"></div>
+                                <div class="col-6"><label class="form-label text-muted small fw-bold mb-1">过期日期</label><input type="date" class="form-control bg-light border-0" name="expiry"></div>
+                            </div>
+                            <div class="mb-3"><label class="form-label text-muted small fw-bold mb-1">备注</label><textarea class="form-control bg-light border-0" name="note" rows="2"></textarea></div>
+                            <button type="submit" class="btn btn-primary w-100 fw-bold shadow-sm">使用私钥签名并上链</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="card glass-card border-0 p-4 text-center">
+                <div class="fs-1">👤</div>
+                <h5 class="fw-bold mt-2">{{ user.full_name }}</h5>
+                <p class="text-muted small">您的角色是 <strong>{{ user.role }}</strong></p>
+                <hr>
+                <p class="small">审计模式已开启。您可以查看、导出和生成审计报告，但无法进行数据上链操作。</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="col-12 col-md-8">
+            <div class="glass-card p-3 mb-4">
+                <form action="/" method="GET" class="mb-0">
+                    <div class="row g-2">
+                        <div class="col-12 col-md-4">
+                            <select name="category" class="form-select border-0 bg-light">
+                                <option value="">All Categories</option>
+                                {% for cat in categories %}<option value="{{ cat }}" {% if cat == current_category %}selected{% endif %}>{{ cat }}</option>{% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-12 col-md-6">
+                            <input type="text" name="search" class="form-control border-0 bg-light" placeholder="Search name, hash, or location..." value="{{ current_search }}">
+                        </div>
+                        <div class="col-12 col-md-2">
+                            <button type="submit" class="btn btn-dark w-100 fw-bold">🔍 Search</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+
+            {% for row in records %}
+                {% set is_consumed = row.record_hash in dash_data.consumed_hashes %}
+                <div class="card glass-card border-0 mb-3 {% if is_consumed %}item-consumed{% endif %}">
+                    <div class="card-body d-flex item-card-body p-3">
+                        
+                        <div id="carousel-{{row.id}}" class="carousel slide me-3 shadow-sm {% if is_consumed %}img-consumed{% endif %}" style="width:100px; height:100px; border-radius:8px; overflow:hidden;" data-bs-ride="carousel">
+                            <div class="carousel-inner h-100">
+                                {% for img_hash in row.attachment_list %}
+                                <div class="carousel-item h-100 {% if loop.first %}active{% endif %}">
+                                    <img src="/images/{{ img_hash }}.jpg" class="d-block w-100 h-100" alt="Item Image" style="object-fit: cover;" onclick="showImageViewer(this.src)">
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% if row.attachment_list|length > 1 %}
+                            <button class="carousel-control-prev" type="button" data-bs-target="#carousel-{{row.id}}" data-bs-slide="prev">
+                                <span class="carousel-control-prev-icon" aria-hidden="true" style="width: 1rem; height: 1rem;"></span>
+                            </button>
+                            <button class="carousel-control-next" type="button" data-bs-target="#carousel-{{row.id}}" data-bs-slide="next">
+                                <span class="carousel-control-next-icon" aria-hidden="true" style="width: 1rem; height: 1rem;"></span>
+                            </button>
+                            {% endif %}
+                        </div>
+                        
+                        <div class="flex-grow-1 overflow-hidden d-flex flex-column justify-content-between">
+                            <div>
+                                <h5 class="mb-1 fw-bold text-truncate text-dark">
+                                    {% if is_consumed %}<s>{{ row.item_name }}</s> <span class="badge bg-danger ms-2">Sold/Consumed</span>
+                                    {% else %}{{ row.item_name }}{% endif %}
+                                    <span class="badge bg-secondary float-end">Qty: {{ row.quantity }}</span>
+                                </h5>
+                                
+                                <div class="mb-2 mt-1">
+                                    <span class="badge bg-info text-dark shadow-sm">📍 {{ row.location|default('未标记', true) }}</span>
+                                    {% if row.warranty_date %}<span class="badge bg-warning text-dark shadow-sm">🛡️ 保修至 {{ row.warranty_date }}</span>{% endif %}
+                                    {% if row.expiry_date %}<span class="badge bg-danger shadow-sm">⚠️ 过期于 {{ row.expiry_date }}</span>{% endif %}
+                                </div>
+
+                                <p class="mb-1 text-muted small"><strong>Cat:</strong> {{ row.category }} &nbsp;|&nbsp; <strong>Price:</strong> ¥{{ row.price }} &nbsp;|&nbsp; <strong>Date:</strong> {{ row.timestamp[:10] }}</p>
+                                <p class="mb-2 small text-dark">{{ row.note }}</p>
+                            </div>
+                            
+                            <div>
+                                <hr class="my-2" style="border-color: rgba(0,0,0,0.1);">
+                                <div class="hash-text mb-3">
+                                    <strong>Block Hash:</strong> {{ row.record_hash }}
+                                </div>
+                                <div class="d-flex gap-2 action-buttons">
+                                    <a href="/qr/{{ row.record_hash }}" target="_blank" class="btn btn-sm btn-outline-dark fw-bold">🔲 Show QR</a>
+                                    {% if not is_consumed %}
+                                    <form action="/consume/{{ row.record_hash }}" method="POST" onsubmit="return confirm('确定将此物品标记为已消耗/售出？');" class="m-0 flex-grow-1">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger w-100 fw-bold">🗑️ Mark Consumed</button>
+                                    </form>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                {% if not loop.last and not current_search and not current_category %}
+                    <div class="blockchain-link">🔗</div>
+                {% endif %}
+            {% else %}
+                <div class="alert alert-info shadow-sm glass-card border-0">No records found. Try adjusting your search or add a new item!</div>
+            {% endfor %}
+
+            {% if total_pages > 1 %}
+            <nav class="mt-4 d-flex flex-column align-items-center">
+                <ul class="pagination justify-content-center mb-3 flex-wrap shadow-sm glass-card p-1" style="border-radius: 50px;">
+                    <li class="page-item {% if current_page <= 1 %}disabled{% endif %}">
+                        <a class="page-link bg-transparent border-0 text-dark fw-bold" href="/?page={{ current_page - 1 }}&search={{ current_search }}&category={{ current_category }}" style="border-radius: 50px;">&laquo; Prev</a>
+                    </li>
+                    
+                    {% for p in range(1, total_pages + 1) %}
+                        {% if p == 1 or p == total_pages or (p >= current_page - 2 and p <= current_page + 2) %}
+                            <li class="page-item {% if p == current_page %}active{% endif %}">
+                                <a class="page-link border-0 {% if p == current_page %}bg-dark text-white shadow{% else %}bg-transparent text-dark{% endif %}" href="/?page={{ p }}&search={{ current_search }}&category={{ current_category }}" style="border-radius: 50px; margin: 0 2px;">{{ p }}</a>
+                            </li>
+                        {% elif p == current_page - 3 or p == current_page + 3 %}
+                            <li class="page-item disabled">
+                                <span class="page-link bg-transparent border-0 text-muted">...</span>
+                            </li>
+                        {% endif %}
+                    {% endfor %}
+
+                    <li class="page-item {% if current_page >= total_pages %}disabled{% endif %}">
+                        <a class="page-link bg-transparent border-0 text-dark fw-bold" href="/?page={{ current_page + 1 }}&search={{ current_search }}&category={{ current_category }}" style="border-radius: 50px;">Next &raquo;</a>
+                    </li>
+                </ul>
+
+                <form action="/" method="GET" class="d-flex align-items-center glass-card px-3 py-2 shadow-sm" style="border-radius: 12px; max-width: 250px;">
+                    <input type="hidden" name="search" value="{{ current_search }}">
+                    <input type="hidden" name="category" value="{{ current_category }}">
+                    
+                    <span class="text-muted small me-2 text-nowrap fw-bold">跳转:</span>
+                    <input type="number" name="page" class="form-control form-control-sm border-0 bg-light me-2 text-center" min="1" max="{{ total_pages }}" required placeholder="1-{{ total_pages }}" style="width: 70px;">
+                    <button type="submit" class="btn btn-sm btn-primary fw-bold px-3">Go</button>
+                </form>
+            </nav>
+            {% endif %}
+            
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="qrScannerModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content glass-card border-0">
+            <div class="modal-header border-bottom-0">
+                <h5 class="modal-title fw-bold">📷 Scan Item QR Code</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" id="closeScannerBtn"></button>
+            </div>
+            <div class="modal-body text-center">
+                <div id="reader" style="width: 100%; border-radius: 12px; overflow: hidden;"></div>
+                <p class="text-muted mt-3 small fw-bold">Please point your camera at the Ledger QR Code.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="imageViewerModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-xl">
+        <div class="modal-content bg-transparent border-0">
+            <div class="modal-header border-0 pb-0 justify-content-end">
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close" style="text-shadow: 0 0 10px rgba(0,0,0,0.5);"></button>
+            </div>
+            <div class="modal-body text-center p-0" onclick="bootstrap.Modal.getInstance(document.getElementById('imageViewerModal')).hide()">
+                <img id="fullSizeImage" src="" alt="Full Size" class="img-fluid rounded shadow-lg" style="max-height: 85vh; object-fit: contain; cursor: zoom-out;">
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    // 1. 图片放大核心逻辑
+    function showImageViewer(imageSrc) {
+        document.getElementById('fullSizeImage').src = imageSrc;
+        var viewerModal = new bootstrap.Modal(document.getElementById('imageViewerModal'));
+        viewerModal.show();
+    }
+
+    // 2. 二维码扫描逻辑
+    let html5QrcodeScanner;
+    document.getElementById('qrScannerModal').addEventListener('shown.bs.modal', function () {
+        if (html5QrcodeScanner) { html5QrcodeScanner.clear(); }
+        html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: {width: 250, height: 250} }, false);
+        html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+    });
+
+    document.getElementById('qrScannerModal').addEventListener('hidden.bs.modal', function () {
+        if (html5QrcodeScanner) { html5QrcodeScanner.clear().catch(e => console.error(e)); }
+    });
+
+    function onScanSuccess(decodedText, decodedResult) {
+        if(decodedText.includes("Ledger Hash:\n")) {
+            let targetHash = decodedText.split("Ledger Hash:\n")[1].trim();
+            html5QrcodeScanner.clear().then(() => { window.location.href = "/?search=" + targetHash; });
+        } else {
+            alert("Invalid QR Code: Not a Ledger Item.");
+        }
+    }
+    
+    function onScanFailure(error) {
+        // 静默处理扫码过程中的杂讯
+    }
+</script>
+</body>
+</html>

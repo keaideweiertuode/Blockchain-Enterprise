@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>用户管理 - Blockchain Enterprise</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: #f4f7f6; padding: 40px 0; }
+        .glass-card { background: white; border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.05); border: none; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2 class="fw-bold text-dark">👥 企业用户管理</h2>
+            <nav aria-label="breadcrumb">
+              <ol class="breadcrumb mb-0">
+                <li class="breadcrumb-item"><a href="/" class="text-decoration-none">首页</a></li>
+                <li class="breadcrumb-item active">用户列表</li>
+              </ol>
+            </nav>
+        </div>
+        <button class="btn btn-primary fw-bold" data-bs-toggle="modal" data-bs-target="#addUserModal">➕ 新增账号</button>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }} alert-dismissible fade show border-0 shadow-sm" role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="card glass-card">
+        <div class="card-body p-0">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-4">ID</th>
+                        <th>用户名</th>
+                        <th>姓名</th>
+                        <th>企业角色</th>
+                        <th>最后登录</th>
+                        <th class="text-end pe-4">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for u in users %}
+                    <tr>
+                        <td class="ps-4 text-muted">#{{ u.id }}</td>
+                        <td class="fw-bold">{{ u.username }}</td>
+                        <td>{{ u.full_name }}</td>
+                        <td>
+                            {% if u.role == 'SUPER_ADMIN' %}<span class="badge bg-dark">超级管理员</span>
+                            {% elif u.role == 'MANAGER' %}<span class="badge bg-primary">资产主管</span>
+                            {% elif u.role == 'AUDITOR' %}<span class="badge bg-info text-dark">审计员</span>
+                            {% else %}<span class="badge bg-secondary">普通员工</span>{% endif %}
+                        </td>
+                        <td class="small text-muted">{{ u.last_login or '从未登录' }}</td>
+                        <td class="text-end pe-4">
+                            {% if u.id != current_user.id %}
+                            <form action="/admin/users/delete/{{ u.id }}" method="POST" onsubmit="return confirm('确定要注销此账号？此操作不可撤销！');" style="display:inline;">
+                                <button type="submit" class="btn btn-sm btn-outline-danger">注销</button>
+                            </form>
+                            {% else %}
+                            <span class="text-muted small">当前登录中</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Add User -->
+<div class="modal fade" id="addUserModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold">➕ 创建新企业账号</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form action="/admin/users/add" method="POST">
+                <div class="modal-body">
+                    <div class="mb-3"><label class="form-label small fw-bold">用户名 (登录标识)</label><input type="text" name="username" class="form-control" required></div>
+                    <div class="mb-3"><label class="form-label small fw-bold">初始密码</label><input type="password" name="password" class="form-control" required></div>
+                    <div class="mb-3"><label class="form-label small fw-bold">真实姓名</label><input type="text" name="full_name" class="form-control" required></div>
+                    <div class="mb-3">
+                        <label class="form-label small fw-bold">权限角色</label>
+                        <select name="role" class="form-select" required>
+                            <option value="VIEWER">VIEWER (普通员工 - 只读)</option>
+                            <option value="AUDITOR">AUDITOR (审计员 - 可生成报告)</option>
+                            <option value="MANAGER">MANAGER (资产主管 - 可上链)</option>
+                            <option value="SUPER_ADMIN">SUPER_ADMIN (超级管理员)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer border-0">
+                    <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
+                    <button type="submit" class="btn btn-primary px-4">立即创建</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

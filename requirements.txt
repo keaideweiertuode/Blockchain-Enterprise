@@ -1,0 +1,19 @@
+# Blockchain Enterprise 核心依赖清单
+
+# Web 框架与路由
+flask
+
+# 密码学与安全
+pynacl
+python-dotenv
+
+# 配置文件解析 (YAML)
+pyyaml
+
+# 图像处理与二维码
+pillow
+qrcode
+pyzbar
+
+# 后台任务调度 (用于自动审计/巡检)
+apscheduler
