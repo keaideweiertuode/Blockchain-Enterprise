@@ -30,9 +30,16 @@ class EnterpriseLedger:
                 password_hash TEXT NOT NULL,
                 role TEXT NOT NULL,
                 full_name TEXT,
-                last_login DATETIME
+                last_login DATETIME,
+                totp_secret TEXT
             )
         """)
+        # 尝试升级表结构以兼容旧版
+        try:
+            c.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT")
+        except sqlite3.OperationalError:
+            pass # 可能是列已存在
+            
         # 预置一个演示用的超级管理员 (密码默认为 admin123)
         demo_pwd_hash = hashlib.sha256("admin123".encode()).hexdigest()
         c.execute("INSERT OR IGNORE INTO users (username, password_hash, role, full_name) VALUES (?, ?, ?, ?)",

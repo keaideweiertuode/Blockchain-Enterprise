@@ -20,12 +20,90 @@ def register_routes(app, ledger, crypto, auditor, auth, config):
             password = request.form.get("password")
             user = auth.authenticate(username, password)
             if user:
-                session['user'] = user
-                flash(f"欢迎回来, {user['full_name']}!", "success")
-                return redirect(url_for('index'))
+                # 检查角色是否需要强制 2FA
+                if user['role'] in ['SUPER_ADMIN', 'MANAGER']:
+                    session['pre_2fa_user'] = user
+                    if not user.get('totp_secret'):
+                        return redirect(url_for('setup_2fa'))
+                    else:
+                        return redirect(url_for('verify_2fa'))
+                else:
+                    session['user'] = user
+                    flash(f"欢迎回来, {user['full_name']}!", "success")
+                    return redirect(url_for('index'))
             else:
                 flash("用户名或密码错误", "danger")
         return render_template("login.html")
+
+    @app.route("/login/setup_2fa", methods=["GET", "POST"])
+    def setup_2fa():
+        pre_user = session.get('pre_2fa_user')
+        if not pre_user:
+            return redirect(url_for('login'))
+        
+        if request.method == "POST":
+            token = request.form.get("token")
+            secret = session.get('temp_totp_secret')
+            if auth.verify_totp(secret, token):
+                if auth.set_user_totp_secret(pre_user['id'], secret):
+                    # 登录成功
+                    pre_user['totp_secret'] = secret
+                    session['user'] = session.pop('pre_2fa_user')
+                    session.pop('temp_totp_secret', None)
+                    flash(f"2FA 设置成功！欢迎回来, {pre_user['full_name']}!", "success")
+                    return redirect(url_for('index'))
+                else:
+                    flash("保存密钥失败，请重试", "danger")
+            else:
+                flash("动态验证码错误，请重新输入", "danger")
+                
+            # POST 失败时，返回原有的 secret 和 QR 码
+            secret = session.get('temp_totp_secret')
+            import pyotp
+            import base64
+            totp = pyotp.TOTP(secret)
+            uri = totp.provisioning_uri(name=pre_user['username'], issuer_name='Blockchain Enterprise')
+            img = qrcode.make(uri)
+            buf = io.BytesIO()
+            img.save(buf, format='PNG')
+            qr_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+            return render_template("setup_2fa.html", qr_b64=qr_b64, secret=secret)
+                
+        # GET 请求生成新密钥和 QR 码
+        import pyotp
+        import base64
+        if 'temp_totp_secret' not in session:
+            session['temp_totp_secret'] = auth.generate_totp_secret()
+            
+        secret = session['temp_totp_secret']
+        totp = pyotp.TOTP(secret)
+        uri = totp.provisioning_uri(name=pre_user['username'], issuer_name='Blockchain Enterprise')
+        
+        # 生成二维码的 Base64 字符串
+        img = qrcode.make(uri)
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        qr_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+        
+        return render_template("setup_2fa.html", qr_b64=qr_b64, secret=secret)
+
+    @app.route("/login/verify_2fa", methods=["GET", "POST"])
+    def verify_2fa():
+        pre_user = session.get('pre_2fa_user')
+        if not pre_user:
+            return redirect(url_for('login'))
+            
+        if request.method == "POST":
+            token = request.form.get("token")
+            secret = pre_user.get('totp_secret')
+            if auth.verify_totp(secret, token):
+                session['user'] = session.pop('pre_2fa_user')
+                flash(f"验证成功！欢迎回来, {pre_user['full_name']}!", "success")
+                return redirect(url_for('index'))
+            else:
+                flash("动态验证码错误", "danger")
+                
+        return render_template("verify_2fa.html")
 
     @app.route("/logout")
     def logout():
@@ -187,17 +265,21 @@ def register_routes(app, ledger, crypto, auditor, auth, config):
     # --- 审计与工具接口 ---
     @app.route("/verify_chain")
     def verify_chain():
-        results = auditor.run_full_audit()
-        report = auditor.generate_compliance_report()
-        
-        if report['score'] == 100:
-            flash("Blockchain verified! 所有记录安全且未被篡改。", "success")
-        else:
-            flash(f"警告：账本校验未通过！合规评分: {report['score']}%", "danger")
-            for r in results:
-                if not r["valid"]:
-                    flash(f"Block {r['id']} ({r['item_name']}) 异常: {', '.join(r['issues'])}", "danger")
-        return redirect(url_for('index'))
+        try:
+            results = auditor.run_full_audit()
+            report = auditor.generate_compliance_report()
+            
+            if report['score'] == 100:
+                flash("Blockchain verified! 所有记录安全且未被篡改。", "success")
+            else:
+                flash(f"警告：账本校验未通过！合规评分: {report['score']}%", "danger")
+                for r in results:
+                    if not r["valid"]:
+                        flash(f"Block {r['id']} ({r['item_name']}) 异常: {', '.join(r['issues'])}", "danger")
+            return redirect(url_for('index'))
+        except FileNotFoundError as e:
+            flash(str(e), "danger")
+            return redirect(url_for('index'))
 
     @app.route("/audit/summary")
     def get_audit_summary():
@@ -205,8 +287,12 @@ def register_routes(app, ledger, crypto, auditor, auth, config):
 
     @app.route("/audit/report")
     def get_audit_report():
-        report_data = auditor.generate_compliance_report()
-        return render_template("audit_report.html", report=report_data)
+        try:
+            report_data = auditor.generate_compliance_report()
+            return render_template("audit_report.html", report=report_data)
+        except FileNotFoundError as e:
+            flash(str(e), "danger")
+            return redirect(url_for('index'))
 
     @app.route("/qr/<record_hash>")
     def generate_qr(record_hash):

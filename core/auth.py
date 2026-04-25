@@ -1,5 +1,6 @@
 import sqlite3
 import hashlib
+import pyotp
 from datetime import datetime
 from typing import Optional, Dict, List
 
@@ -23,7 +24,7 @@ class EnterpriseAuth:
         c = conn.cursor()
         
         pwd_hash = self._hash_password(password)
-        c.execute("SELECT id, username, role, full_name FROM users WHERE username = ? AND password_hash = ?", 
+        c.execute("SELECT id, username, role, full_name, totp_secret FROM users WHERE username = ? AND password_hash = ?", 
                   (username, pwd_hash))
         user = c.fetchone()
         
@@ -37,6 +38,29 @@ class EnterpriseAuth:
         
         conn.close()
         return None
+
+    def generate_totp_secret(self) -> str:
+        """生成一个新的 TOTP 密钥"""
+        return pyotp.random_base32()
+
+    def verify_totp(self, secret: str, token: str) -> bool:
+        """验证 TOTP token"""
+        totp = pyotp.TOTP(secret)
+        return totp.verify(token)
+
+    def set_user_totp_secret(self, user_id: int, secret: str) -> bool:
+        """为用户保存 TOTP 密钥"""
+        conn = self._get_conn()
+        c = conn.cursor()
+        try:
+            c.execute("UPDATE users SET totp_secret = ? WHERE id = ?", (secret, user_id))
+            conn.commit()
+            return True
+        except Exception:
+            return False
+        finally:
+            conn.close()
+
 
     def create_user(self, username, password, role, full_name=""):
         """创建新用户 (仅超级管理员可用)"""

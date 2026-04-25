@@ -13,7 +13,7 @@ storage/*.log
 storage/audit_history/
 
 # Security (CRITICAL)
-keys/private.key
+keys/*.key
 .env
 
 # OS

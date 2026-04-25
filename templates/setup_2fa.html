@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>设置双因素认证 (2FA) - Blockchain Enterprise</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { 
+            background: linear-gradient(135deg, #1a2a6c, #b21f1f, #fdbb2d);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 40px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 500px;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="text-center mb-4">
+            <h3 class="fw-bold text-dark">🔐 绑定身份验证器</h3>
+            <p class="text-muted small">为了保障企业资产安全，您的账号角色需要强制开启 2FA 双因素认证。</p>
+        </div>
+        
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="alert alert-{{ category }} small py-2">{{ message }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
+        <div class="text-center mb-4">
+            <p class="small fw-bold mb-2">1. 请使用 Google Authenticator 或类似 App 扫描下方二维码：</p>
+            <img src="data:image/png;base64,{{ qr_b64 }}" alt="QR Code" class="img-fluid border rounded p-2 bg-white" style="max-width: 200px;">
+            <p class="small text-muted mt-2">如果无法扫码，请手动输入密钥：<br><code class="fs-6 bg-light p-1 rounded">{{ secret }}</code></p>
+        </div>
+
+        <form method="POST">
+            <div class="mb-3">
+                <label class="form-label small fw-bold">2. 请输入 App 上显示的 6 位动态验证码：</label>
+                <input type="text" name="token" class="form-control text-center fs-4 letter-spacing-2" required placeholder="000000" maxlength="6" autocomplete="off">
+            </div>
+            <button type="submit" class="btn btn-primary w-100 fw-bold py-2 mt-2">验证并绑定</button>
+            <a href="/login" class="btn btn-link w-100 mt-2 text-muted small">返回登录</a>
+        </form>
+    </div>
+</body>
+</html>

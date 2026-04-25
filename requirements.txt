@@ -7,6 +7,7 @@ gunicorn
 # 密码学与安全
 pynacl
 python-dotenv
+pyotp
 
 # 配置文件解析 (YAML)
 pyyaml

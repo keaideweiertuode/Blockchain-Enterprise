@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>验证双因素认证 (2FA) - Blockchain Enterprise</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { 
+            background: linear-gradient(135deg, #1a2a6c, #b21f1f, #fdbb2d);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 40px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 400px;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="text-center mb-4">
+            <h3 class="fw-bold text-dark">🔐 两步验证</h3>
+            <p class="text-muted small">为了您的账号安全，本次登录需要两步验证。</p>
+        </div>
+        
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="alert alert-{{ category }} small py-2">{{ message }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
+        <form method="POST">
+            <div class="mb-3">
+                <label class="form-label small fw-bold text-center w-100 mb-3">请输入身份验证器 App 上的 6 位验证码：</label>
+                <input type="text" name="token" class="form-control text-center fs-3 letter-spacing-2 py-3" required placeholder="0 0 0 0 0 0" maxlength="6" autocomplete="off" autofocus>
+            </div>
+            <button type="submit" class="btn btn-primary w-100 fw-bold py-2 mt-3">验证并登录</button>
+            <a href="/login" class="btn btn-link w-100 mt-2 text-muted small">返回上一步</a>
+        </form>
+    </div>
+</body>
+</html>
