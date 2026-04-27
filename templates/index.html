@@ -130,22 +130,10 @@
                 <div class="card glass-card border-0 position-sticky" style="top: 20px;">
                     <div class="card-header bg-transparent border-bottom d-flex justify-content-between align-items-center">
                         <span class="fw-bold">➕ 资产上链登记</span>
-                        {% if crypto_can_sign %}
-                        <span class="badge bg-success">已解锁 (Key Online)</span>
-                        {% else %}
-                        <span class="badge bg-secondary">已锁定 (Key Offline)</span>
-                        {% endif %}
+                        <span class="badge bg-info text-dark">端侧签名模式</span>
                     </div>
                     <div class="card-body">
-                        {% if not crypto_can_sign %}
-                        <div class="alert alert-light border text-center py-3">
-                            <p class="small text-muted mb-2">当前处于[离线冷钱包]模式，签名私钥未识别。</p>
-                            <form action="/admin/crypto/reload" method="POST">
-                                <button type="submit" class="btn btn-sm btn-outline-primary">🔌 识别并加载物理钥匙</button>
-                            </form>
-                        </div>
-                        {% endif %}
-                        <form action="/add" method="POST" enctype="multipart/form-data" {% if not crypto_can_sign %}style="opacity: 0.5; pointer-events: none;"{% endif %}>
+                        <form id="addAssetForm" enctype="multipart/form-data">
                             <div class="mb-3"><label class="form-label text-muted small fw-bold mb-1">图片 (按住Ctrl可多选)</label><input type="file" class="form-control bg-light border-0" name="images" accept="image/*" multiple required></div>
                             <div class="mb-3"><label class="form-label text-muted small fw-bold mb-1">类目</label><input type="text" class="form-control bg-light border-0" name="category" required></div>
                             <div class="mb-3"><label class="form-label text-muted small fw-bold mb-1">物品名称</label><input type="text" class="form-control bg-light border-0" name="name" required></div>
@@ -159,12 +147,13 @@
                                 <div class="col-6"><label class="form-label text-muted small fw-bold mb-1">过期日期</label><input type="date" class="form-control bg-light border-0" name="expiry"></div>
                             </div>
                             <div class="mb-3"><label class="form-label text-muted small fw-bold mb-1">备注</label><textarea class="form-control bg-light border-0" name="note" rows="2"></textarea></div>
-                            <button type="submit" class="btn btn-primary w-100 fw-bold shadow-sm">使用私钥签名并上链</button>
+                            <button type="button" onclick="prepareAsset()" class="btn btn-primary w-100 fw-bold shadow-sm" id="prepareBtn">准备上链数据</button>
                         </form>
                     </div>
                 </div>
             </div>
             {% else %}
+
             <div class="card glass-card border-0 p-4 text-center">
                 <div class="fs-1">👤</div>
                 <h5 class="fw-bold mt-2">{{ user.full_name }}</h5>
@@ -221,8 +210,22 @@
                         <div class="flex-grow-1 overflow-hidden d-flex flex-column justify-content-between">
                             <div>
                                 <h5 class="mb-1 fw-bold text-truncate text-dark">
-                                    {% if is_consumed %}<s>{{ row.item_name }}</s> <span class="badge bg-danger ms-2">Sold/Consumed</span>
+                                    {% if is_consumed %}<s>{{ row.item_name }}</s>
                                     {% else %}{{ row.item_name }}{% endif %}
+                                    
+                                    {% if row.current_status == 'AVAILABLE' %}
+                                        <span class="badge bg-success ms-2">可用</span>
+                                    {% elif row.current_status == 'IN_USE' %}
+                                        <span class="badge bg-primary ms-2" title="{{ row.status_metadata }}">领用中 {{ "("+row.status_metadata+")" if row.status_metadata else "" }}</span>
+                                    {% elif row.current_status == 'MAINTENANCE' %}
+                                        <span class="badge bg-warning text-dark ms-2" title="{{ row.status_metadata }}">维修中 {{ "("+row.status_metadata+")" if row.status_metadata else "" }}</span>
+                                    {% elif row.current_status == 'TRANSFERRED' %}
+                                        <span class="badge bg-info text-dark ms-2" title="{{ row.status_metadata }}">调拨中 {{ "("+row.status_metadata+")" if row.status_metadata else "" }}</span>
+                                    {% elif row.current_status == 'SCRAPPED' %}
+                                        <span class="badge bg-danger ms-2">报废/已消耗</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary ms-2">{{ row.current_status }}</span>
+                                    {% endif %}
                                     <span class="badge bg-secondary float-end">Qty: {{ row.quantity }}</span>
                                 </h5>
                                 
@@ -243,10 +246,8 @@
                                 </div>
                                 <div class="d-flex gap-2 action-buttons">
                                     <a href="/qr/{{ row.record_hash }}" target="_blank" class="btn btn-sm btn-outline-dark fw-bold">🔲 Show QR</a>
-                                    {% if not is_consumed %}
-                                    <form action="/consume/{{ row.record_hash }}" method="POST" onsubmit="return confirm('确定将此物品标记为已消耗/售出？');" class="m-0 flex-grow-1">
-                                        <button type="submit" class="btn btn-sm btn-outline-danger w-100 fw-bold">🗑️ Mark Consumed</button>
-                                    </form>
+                                    {% if not is_consumed and user.role in ['SUPER_ADMIN', 'MANAGER'] %}
+                                    <button type="button" class="btn btn-sm btn-outline-primary w-100 fw-bold" onclick="openStatusModal('{{ row.record_hash }}', '{{ row.current_status }}')">🔄 修改状态</button>
                                     {% endif %}
                                 </div>
                             </div>
@@ -328,14 +329,278 @@
     </div>
 </div>
 
+<!-- Modal: 修改状态 -->
+<div class="modal fade" id="statusModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content glass-card border-0">
+            <div class="modal-header border-bottom-0">
+                <h5 class="modal-title fw-bold">🔄 修改资产状态</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="statusForm" onsubmit="event.preventDefault(); prepareStatusUpdate();">
+                    <input type="hidden" name="record_hash" id="statusRecordHash">
+                    <div class="mb-3">
+                        <label class="form-label text-muted small fw-bold mb-1">新状态</label>
+                        <select name="new_status" id="newStatusSelect" class="form-select bg-light border-0" required>
+                            <option value="AVAILABLE">🟢 可用 (归还/入库)</option>
+                            <option value="IN_USE">🔵 领用 (使用中)</option>
+                            <option value="MAINTENANCE">🟠 维修 (维护中)</option>
+                            <option value="TRANSFERRED">🟣 调拨 (转移场地)</option>
+                            <option value="SCRAPPED">🔴 报废 (核销)</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-muted small fw-bold mb-1">备注信息 (如: 领用人、调拨地点等)</label>
+                        <input type="text" name="metadata" class="form-control bg-light border-0" placeholder="选填...">
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100 fw-bold shadow-sm" id="prepareStatusBtn">准备更新数据</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: 端侧签名授权 -->
+<div class="modal fade" id="signModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg">
+            <div class="modal-header bg-warning text-dark">
+                <h5 class="modal-title fw-bold">🔐 授权端侧签名</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body text-center py-4">
+                <div class="spinner-border text-primary mb-3 d-none" id="signSpinner" role="status"></div>
+                <p class="mb-3">服务器已生成待上链数据指纹：<br><code id="fingerprintDisplay" class="bg-light p-1 rounded"></code></p>
+                
+                <div class="alert alert-info small text-start">
+                    <strong>安全提示：</strong>您的私钥仅在本地浏览器内存中进行瞬间计算，绝不会上传至服务器。
+                </div>
+                
+                <div class="mb-3 text-start">
+                    <label class="form-label fw-bold small">请选择本地 U 盘中的私钥文件 (private.key):</label>
+                    <input class="form-control" type="file" id="privateKeyInput" accept=".key">
+                </div>
+            </div>
+            <div class="modal-footer border-0 justify-content-center">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消上链</button>
+                <button type="button" class="btn btn-success fw-bold px-4" onclick="executeLocalSign()" id="confirmSignBtn">确认并签名</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<!-- 引入 TweetNaCl 密码学库，用于本地 Ed25519 签名 -->
+<script src="https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js"></script>
 <script>
+    // 存储从准备阶段返回的待签名数据
+    let pendingPayload = null;
+    let pendingRecordHash = null;
+
+    // 将十六进制字符串转为 Uint8Array
+    function hexToUint8Array(hexString) {
+        if (hexString.length % 2 !== 0) throw new Error("Invalid hex string");
+        var arrayBuffer = new Uint8Array(hexString.length / 2);
+        for (var i = 0; i < hexString.length; i += 2) {
+            var byteValue = parseInt(hexString.substring(i, i + 2), 16);
+            arrayBuffer[i / 2] = byteValue;
+        }
+        return arrayBuffer;
+    }
+
+    // 将 Uint8Array 转为十六进制字符串
+    function uint8ArrayToHex(uint8Array) {
+        return Array.from(uint8Array).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    // 将普通字符串转为 Uint8Array (这里用于 record_hash)
+    function stringToUint8Array(str) {
+        return new TextEncoder().encode(str);
+    }
+
+    // 1. 准备阶段
+    async function prepareAsset() {
+        const form = document.getElementById('addAssetForm');
+        if (!form.checkValidity()) {
+            form.reportValidity();
+            return;
+        }
+
+        const prepareBtn = document.getElementById('prepareBtn');
+        prepareBtn.disabled = true;
+        prepareBtn.innerText = "数据打包中...";
+
+        const formData = new FormData(form);
+        try {
+            const response = await fetch('/api/assets/prepare', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await response.json();
+            
+            if (data.status === 'success') {
+                pendingPayload = data.payload;
+                pendingRecordHash = data.record_hash;
+                
+                // 显示弹窗并展示指纹
+                document.getElementById('fingerprintDisplay').innerText = pendingRecordHash.substring(0, 32) + "...";
+                const signModal = new bootstrap.Modal(document.getElementById('signModal'));
+                signModal.show();
+            } else {
+                alert("准备上链失败：" + data.message);
+            }
+        } catch (error) {
+            alert("网络请求失败：" + error);
+        } finally {
+            prepareBtn.disabled = false;
+            prepareBtn.innerText = "准备上链数据";
+        }
+    }
+
+    // 2. 本地签名阶段
+    async function executeLocalSign() {
+        const fileInput = document.getElementById('privateKeyInput');
+        if (fileInput.files.length === 0) {
+            alert("请先选择 private.key 文件！");
+            return;
+        }
+
+        const confirmBtn = document.getElementById('confirmSignBtn');
+        const spinner = document.getElementById('signSpinner');
+        confirmBtn.disabled = true;
+        spinner.classList.remove('d-none');
+
+        const file = fileInput.files[0];
+        const reader = new FileReader();
+
+        reader.onload = async function(e) {
+            try {
+                // PyNaCl 生成的 key 文件内容通常是原始字节（seed）
+                // 我们直接将文件内容读取为 ArrayBuffer，然后转为 Uint8Array
+                const privateKeyBytes = new Uint8Array(e.target.result);
+                
+                // Ed25519 的 seed 是 32 字节，完整的 secret key 是 64 字节
+                // tweetnacl 需要 64 字节的 secret key 进行签名。
+                // 如果文件是 32 字节，我们需要从 seed 生成密钥对。
+                let secretKey;
+                if (privateKeyBytes.length === 32) {
+                    const keyPair = nacl.sign.keyPair.fromSeed(privateKeyBytes);
+                    secretKey = keyPair.secretKey;
+                } else if (privateKeyBytes.length === 64) {
+                    secretKey = privateKeyBytes;
+                } else {
+                    throw new Error("无效的私钥文件格式 (长度错误)。");
+                }
+
+                // 将要签名的 hash 字符串转为字节数组
+                const messageBytes = stringToUint8Array(pendingRecordHash);
+                
+                // 本地执行签名计算！
+                const signatureBytes = nacl.sign.detached(messageBytes, secretKey);
+                const signatureHex = uint8ArrayToHex(signatureBytes);
+
+                // 3. 提交上链阶段
+                const commitResponse = await fetch('/api/assets/commit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        payload: pendingPayload,
+                        record_hash: pendingRecordHash,
+                        signature: signatureHex
+                    })
+                });
+
+                const commitData = await commitResponse.json();
+                if (commitData.status === 'success') {
+                    // 强制刷新页面显示新数据
+                    window.location.reload();
+                } else {
+                    alert("上链被拒绝：" + commitData.message);
+                }
+
+            } catch (error) {
+                alert("签名或提交失败：" + error.message);
+            } finally {
+                confirmBtn.disabled = false;
+                spinner.classList.add('d-none');
+                fileInput.value = ''; // 安全清理输入框
+            }
+        };
+
+        reader.onerror = function() {
+            alert("无法读取私钥文件！");
+            confirmBtn.disabled = false;
+            spinner.classList.add('d-none');
+        };
+
+        // 以 ArrayBuffer 读取文件，因为私钥是二进制数据
+        reader.readAsArrayBuffer(file);
+    }
+
+    // --- 以下为原有的代码 ---
     // 1. 图片放大核心逻辑
     function showImageViewer(imageSrc) {
         document.getElementById('fullSizeImage').src = imageSrc;
         var viewerModal = new bootstrap.Modal(document.getElementById('imageViewerModal'));
         viewerModal.show();
     }
+
+    function openStatusModal(recordHash, currentStatus) {
+        document.getElementById('statusRecordHash').value = recordHash;
+        
+        const statusSelect = document.getElementById('newStatusSelect');
+        for (let i = 0; i < statusSelect.options.length; i++) {
+            if (statusSelect.options[i].value === currentStatus) {
+                statusSelect.selectedIndex = i;
+                break;
+            }
+        }
+        
+        const modal = new bootstrap.Modal(document.getElementById('statusModal'));
+        modal.show();
+    }
+
+    async function prepareStatusUpdate() {
+        const form = document.getElementById('statusForm');
+        if (!form.checkValidity()) {
+            form.reportValidity();
+            return;
+        }
+
+        const prepareBtn = document.getElementById('prepareStatusBtn');
+        prepareBtn.disabled = true;
+        prepareBtn.innerText = "数据打包中...";
+
+        const formData = new FormData(form);
+        try {
+            const response = await fetch('/api/assets/status/prepare', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await response.json();
+            
+            if (data.status === 'success') {
+                pendingPayload = data.payload;
+                pendingRecordHash = data.record_hash;
+                
+                bootstrap.Modal.getInstance(document.getElementById('statusModal')).hide();
+                
+                // 显示弹窗并展示指纹
+                document.getElementById('fingerprintDisplay').innerText = pendingRecordHash.substring(0, 32) + "...";
+                const signModal = new bootstrap.Modal(document.getElementById('signModal'));
+                signModal.show();
+            } else {
+                alert("准备上链失败：" + data.message);
+            }
+        } catch (error) {
+            alert("网络请求失败：" + error);
+        } finally {
+            prepareBtn.disabled = false;
+            prepareBtn.innerText = "准备更新数据";
+        }
+    }
+
 
     // 2. 二维码扫描逻辑
     let html5QrcodeScanner;

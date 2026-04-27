@@ -21,7 +21,6 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, config['storage']['db_path'])
 IMAGE_DIR = os.path.join(BASE_DIR, config['storage']['image_dir'])
 PUBLIC_KEY_PATH = os.path.join(BASE_DIR, config['security']['public_key'])
-PRIVATE_KEY_PATH = os.path.join(BASE_DIR, config['security']['private_key'])
 LOG_FILE = os.path.join(BASE_DIR, config['server']['log_file'])
 
 app = Flask(__name__, 
@@ -31,8 +30,7 @@ app.secret_key = os.urandom(24)
 
 # 2. 初始化核心引擎 (使用绝对路径)
 crypto = EnterpriseCrypto(
-    public_key_path=PUBLIC_KEY_PATH,
-    private_key_path=PRIVATE_KEY_PATH
+    public_key_path=PUBLIC_KEY_PATH
 )
 
 ledger = EnterpriseLedger(

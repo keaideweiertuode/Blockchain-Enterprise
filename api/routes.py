@@ -132,8 +132,7 @@ def register_routes(app, ledger, crypto, auditor, auth, config):
             current_page=page, 
             total_pages=total_pages, 
             dash_data=dash_data,
-            user=session.get('user'),
-            crypto_can_sign=crypto.can_sign
+            user=session.get('user')
         )
 
     # --- 资产读取接口 ---
@@ -201,10 +200,13 @@ def register_routes(app, ledger, crypto, auditor, auth, config):
             flash("注销失败", "danger")
         return redirect(url_for('manage_users'))
 
-    # --- 资产管理接口 (需要私钥) ---
-    @app.route("/add", methods=["POST"])
-    @app.route("/admin/assets/add", methods=["POST"])
-    def add_asset():
+    # --- 资产管理接口 (两阶段提交) ---
+    @app.route("/api/assets/prepare", methods=["POST"])
+    def prepare_asset():
+        """第一阶段：接收数据，计算指纹，返回给前端"""
+        if session.get('user', {}).get('role') not in ['SUPER_ADMIN', 'MANAGER']:
+            return jsonify({"status": "error", "message": "权限不足"}), 403
+
         try:
             category = request.form["category"]
             name = request.form["name"]
@@ -221,16 +223,17 @@ def register_routes(app, ledger, crypto, auditor, auth, config):
             
             for file in files:
                 if file and file.filename != "":
-                    temp_path = os.path.join(UPLOAD_TEMP_DIR, file.filename)
+                    import uuid
+                    # 防止文件名冲突，使用 uuid
+                    temp_filename = f"{uuid.uuid4()}_{file.filename}"
+                    temp_path = os.path.join(UPLOAD_TEMP_DIR, temp_filename)
                     file.save(temp_path)
                     saved_paths.append(temp_path)
 
             if not saved_paths:
-                flash("至少需要上传一张图片!", "danger")
-                return redirect(url_for('index'))
+                return jsonify({"status": "error", "message": "至少需要上传一张图片"}), 400
 
-            record_hash = ledger.add_asset_record(
-                crypto,
+            prepared_data = ledger.prepare_asset_record(
                 category=category,
                 name=name,
                 quantity=quantity,
@@ -242,25 +245,78 @@ def register_routes(app, ledger, crypto, auditor, auth, config):
                 image_paths=saved_paths
             )
             
+            return jsonify({
+                "status": "success", 
+                "record_hash": prepared_data['record_hash'],
+                "payload": prepared_data['payload']
+            })
+            
+        except Exception as e:
+            # 清理刚才可能创建的临时文件
             for p in saved_paths:
                 if os.path.exists(p): os.remove(p)
+            return jsonify({"status": "error", "message": str(e)}), 500
 
-            flash(f"已录入! Hash: {record_hash[:16]}...", "success")
-            return redirect(url_for('index'))
-        except Exception as e:
-            flash(f"Error: {str(e)}", "danger")
-            return redirect(url_for('index'))
-
-    @app.route("/consume/<record_hash>", methods=["POST"])
-    @app.route("/admin/assets/consume/<record_hash>", methods=["POST"])
-    def consume_asset(record_hash):
+    @app.route("/api/assets/commit", methods=["POST"])
+    def commit_asset():
+        """第二阶段：接收签名，验证后真正入库"""
+        if session.get('user', {}).get('role') not in ['SUPER_ADMIN', 'MANAGER']:
+            return jsonify({"status": "error", "message": "权限不足"}), 403
+            
+        data = request.json
+        payload = data.get('payload')
+        signature_hex = data.get('signature')
+        record_hash = data.get('record_hash')
+        
+        if not payload or not signature_hex or not record_hash:
+            return jsonify({"status": "error", "message": "缺少必要的数据或签名"}), 400
+            
+        # 1. 使用服务器常驻的 public.key 验证这个签名是否合法
+        # 确保该数据真的是由合法的 private.key 签发的
+        if not crypto.verify_signature(record_hash, signature_hex):
+            # 签名不合法，清理临时图片
+            for p in payload.get('temp_image_paths', []):
+                if os.path.exists(p): os.remove(p)
+            return jsonify({"status": "error", "message": "签名验证失败，拒绝上链"}), 403
+            
         try:
-            ledger.update_asset_status(crypto, record_hash, "CONSUMED")
-            flash("状态已更新为已消耗/售出", "success")
-            return redirect(url_for('index'))
+            # 2. 验证通过，执行入库
+            final_hash = ledger.commit_asset_record(payload, signature_hex)
+            
+            if final_hash != record_hash:
+                raise ValueError("数据在传输过程中被篡改")
+                
+            flash(f"已上链! Hash: {final_hash[:16]}...", "success")
+            return jsonify({"status": "success", "message": "入库成功", "hash": final_hash})
         except Exception as e:
-            flash(f"Error: {str(e)}", "danger")
-            return redirect(url_for('index'))
+            # 失败兜底清理
+            for p in payload.get('temp_image_paths', []):
+                if os.path.exists(p): os.remove(p)
+            return jsonify({"status": "error", "message": str(e)}), 500
+
+    @app.route("/api/assets/status/prepare", methods=["POST"])
+    def prepare_asset_status():
+        """第一阶段：接收状态流转数据，计算指纹返回给前端待签"""
+        if session.get('user', {}).get('role') not in ['SUPER_ADMIN', 'MANAGER']:
+            return jsonify({"status": "error", "message": "权限不足"}), 403
+            
+        record_hash = request.form.get("record_hash")
+        new_status = request.form.get("new_status", "SCRAPPED")
+        metadata = request.form.get("metadata", "")
+        
+        if not record_hash:
+             return jsonify({"status": "error", "message": "缺少目标资产Hash"}), 400
+            
+        try:
+            prepared_data = ledger.prepare_status_update(target_hash=record_hash, action=new_status, metadata=metadata)
+            
+            return jsonify({
+                "status": "success", 
+                "record_hash": prepared_data['record_hash'],
+                "payload": prepared_data['payload']
+            })
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)}), 500
 
     # --- 审计与工具接口 ---
     @app.route("/verify_chain")

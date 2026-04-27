@@ -75,10 +75,46 @@ class EnterpriseLedger:
         conn.close()
         return last_record[0] if last_record else "GENESIS_BLOCK"
 
+    def _resolve_asset_statuses(self) -> dict:
+        """
+        按时间顺序解析所有系统状态更新区块，计算每个资产的当前状态。
+        格式兼容：
+        旧格式: [CONSUMED] <hash> -> SCRAPPED
+        新格式: [STATUS_UPDATE] <hash> | <NEW_STATUS> | <metadata>
+        返回: { "hash": {"status": "STATUS", "metadata": "...", "timestamp": "..."} }
+        """
+        conn = self._get_conn()
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute("SELECT note, timestamp FROM records WHERE category = 'SYSTEM' AND item_name = 'STATUS_UPDATE' ORDER BY id ASC")
+        
+        statuses = {}
+        for row in c.fetchall():
+            note = row['note']
+            if note.startswith("[CONSUMED]"):
+                target_hash = note.split("[CONSUMED] ")[1].strip()
+                statuses[target_hash] = {"status": "SCRAPPED", "metadata": "Legacy Consumed", "timestamp": row['timestamp']}
+            elif note.startswith("[STATUS_UPDATE]"):
+                try:
+                    parts = note.replace("[STATUS_UPDATE]", "").strip().split(" | ")
+                    if len(parts) >= 2:
+                        target_hash = parts[0].strip()
+                        new_status = parts[1].strip()
+                        metadata = parts[2].strip() if len(parts) > 2 else ""
+                        statuses[target_hash] = {"status": new_status, "metadata": metadata, "timestamp": row['timestamp']}
+                except Exception:
+                    pass # Ignore malformed records
+        conn.close()
+        return statuses
+
     def get_records(self, search_query="", category_filter="", page=1, per_page=10):
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
+        
+        # 预先计算所有资产的状态
+        all_statuses = self._resolve_asset_statuses()
+
         query = "SELECT * FROM records WHERE category != 'SYSTEM'"
         count_query = "SELECT COUNT(*) FROM records WHERE category != 'SYSTEM'"
         params = []
@@ -104,6 +140,13 @@ class EnterpriseLedger:
                 row['attachment_list'] = json.loads(row.get('attachments', '[]'))
             except:
                 row['attachment_list'] = []
+            
+            # 附加当前状态信息
+            asset_status = all_statuses.get(row['record_hash'], {"status": "AVAILABLE", "metadata": "", "timestamp": ""})
+            row['current_status'] = asset_status['status']
+            row['status_metadata'] = asset_status['metadata']
+            row['status_timestamp'] = asset_status['timestamp']
+
         conn.close()
         return rows, total_pages
 
@@ -119,15 +162,13 @@ class EnterpriseLedger:
         conn = self._get_conn()
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
-        c.execute("SELECT note FROM records WHERE category = 'SYSTEM' AND item_name = 'STATUS_UPDATE'")
-        consumed_hashes = set()
-        for row in c.fetchall():
-            if "[CONSUMED]" in row['note']:
-                target = row['note'].split("[CONSUMED] ")[1].strip()
-                consumed_hashes.add(target)
+        
+        all_statuses = self._resolve_asset_statuses()
+        consumed_hashes = [h for h, data in all_statuses.items() if data['status'] == 'SCRAPPED']
+        
         c.execute("SELECT quantity, price, record_hash FROM records WHERE category != 'SYSTEM'")
         records = c.fetchall()
-        active_records = [r for r in records if r['record_hash'] not in consumed_hashes]
+        active_records = [r for r in records if all_statuses.get(r['record_hash'], {}).get('status', 'AVAILABLE') != 'SCRAPPED']
         total_value = sum(r['quantity'] * r['price'] for r in active_records)
         total_items = sum(r['quantity'] for r in active_records)
         conn.close()
@@ -135,53 +176,106 @@ class EnterpriseLedger:
             "total_value": total_value,
             "total_items": total_items,
             "consumed_count": len(consumed_hashes),
-            "consumed_hashes": list(consumed_hashes)
+            "consumed_hashes": consumed_hashes
         }
 
-    def add_asset_record(self, crypto_engine, **kwargs) -> str:
-        conn = self._get_conn()
-        c = conn.cursor()
+    def prepare_asset_record(self, **kwargs) -> dict:
+        """
+        第一阶段：准备数据
+        计算图片的 Merkle Root 和记录的最终 Hash，但不签名也不入库。
+        返回完整的待上链数据包，供前端签名使用。
+        """
         previous_hash = self.get_last_hash()
         
+        # 1. 计算图片哈希 (此时图片还在 uploads 临时目录)
         individual_hashes = []
         for path in kwargs.get('image_paths', []):
-            img_hash = self._get_file_hash(path)
-            individual_hashes.append(img_hash)
-            prefix = img_hash[:2]
-            shard_dir = os.path.join(self.image_dir, prefix)
-            os.makedirs(shard_dir, exist_ok=True)
-            shutil.copy(path, os.path.join(shard_dir, f"{img_hash}.jpg"))
+            if os.path.exists(path):
+                img_hash = self._get_file_hash(path)
+                individual_hashes.append(img_hash)
             
         image_root_hash = self._calculate_merkle_root(individual_hashes)
         attachments_json = json.dumps(individual_hashes)
         timestamp = datetime.now().isoformat()
         
-        # 🛡️ 数据规范化：确保存储和 hashing 的值完全一致
-        # 我们这里不再强制转换为默认值，而是保留数据库原本的样子（空字符串就是空字符串）
-        # 但我们要确保这些值被显式转为字符串
+        # 2. 数据规范化
         safe_note = str(kwargs.get('note', ''))
         safe_location = str(kwargs.get('location', ''))
         safe_warranty = str(kwargs.get('warranty', ''))
         safe_expiry = str(kwargs.get('expiry', ''))
+        str_quantity = str(kwargs.get('quantity'))
+        str_price = str(kwargs.get('price'))
         
+        # 3. 严格按顺序拼接，生成最终指纹
         data_fields = [
-            kwargs.get('category'), 
-            kwargs.get('name'), 
-            kwargs.get('quantity'), 
-            kwargs.get('price'), 
-            safe_note, 
-            timestamp, 
-            previous_hash, 
-            image_root_hash, 
-            safe_location,
-            safe_warranty, 
-            safe_expiry
+            str(kwargs.get('category')), str(kwargs.get('name')), str_quantity, 
+            str_price, safe_note, timestamp, 
+            previous_hash, image_root_hash, safe_location,
+            safe_warranty, safe_expiry
         ]
-        
-        data_string = "".join(map(str, data_fields))
+        data_string = "".join(data_fields)
         record_hash = hashlib.sha256(data_string.encode()).hexdigest()
-        signature = crypto_engine.sign_data(record_hash)
         
+        # 返回完整的数据包
+        return {
+            "record_hash": record_hash,
+            "payload": {
+                "category": str(kwargs.get('category')),
+                "name": str(kwargs.get('name')),
+                "quantity": str_quantity,
+                "price": str_price,
+                "note": safe_note,
+                "timestamp": timestamp,
+                "previous_hash": previous_hash,
+                "image_root_hash": image_root_hash,
+                "location": safe_location,
+                "warranty": safe_warranty,
+                "expiry": safe_expiry,
+                "attachments_json": attachments_json,
+                "temp_image_paths": kwargs.get('image_paths', [])
+            }
+        }
+
+    def commit_asset_record(self, payload: dict, signature_hex: str) -> bool:
+        """
+        第二阶段：确认上链
+        接收前端传回的签名，验证无误后，转移图片并写入数据库。
+        """
+        conn = self._get_conn()
+        c = conn.cursor()
+        
+        # 1. 再次重构数据字符串（防止前端篡改 payload）
+        data_fields = [
+            str(payload['category']), str(payload['name']), str(payload['quantity']), 
+            str(payload['price']), str(payload['note']), str(payload['timestamp']), 
+            str(payload['previous_hash']), str(payload['image_root_hash']), 
+            str(payload['location']), str(payload['warranty']), str(payload['expiry'])
+        ]
+        data_string = "".join(data_fields)
+        recalculated_hash = hashlib.sha256(data_string.encode()).hexdigest()
+        
+        # 注意：这里的验证已在 API 层通过 EnterpriseCrypto 完成，
+        # ledger 只负责入库逻辑，但为了防呆，确保传进来的 hash 是准确的。
+        
+        # 2. 转移并分片存储图片
+        temp_paths = payload.get('temp_image_paths', [])
+        if isinstance(payload.get('attachments_json'), str):
+            hashes = json.loads(payload['attachments_json'])
+        else:
+            hashes = payload.get('attachments_json', [])
+            payload['attachments_json'] = json.dumps(hashes)
+            
+        for i, path in enumerate(temp_paths):
+            if os.path.exists(path) and i < len(hashes):
+                img_hash = hashes[i]
+                prefix = img_hash[:2]
+                shard_dir = os.path.join(self.image_dir, prefix)
+                os.makedirs(shard_dir, exist_ok=True)
+                final_path = os.path.join(shard_dir, f"{img_hash}.jpg")
+                shutil.copy(path, final_path)
+                os.remove(path) # 清理临时文件
+
+        # 3. 数据库持久化
         c.execute("""
             INSERT INTO records (
                 category, item_name, quantity, price, note, timestamp, 
@@ -189,26 +283,37 @@ class EnterpriseLedger:
                 location, warranty_date, expiry_date, attachments
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            kwargs.get('category'), kwargs.get('name'), kwargs.get('quantity'), 
-            kwargs.get('price'), safe_note, timestamp, 
-            previous_hash, image_root_hash, record_hash, signature,
-            safe_location, safe_warranty, safe_expiry, attachments_json
+            payload['category'], payload['name'], payload['quantity'], 
+            payload['price'], payload['note'], payload['timestamp'], 
+            payload['previous_hash'], payload['image_root_hash'], 
+            recalculated_hash, signature_hex,
+            payload['location'], payload['warranty'], payload['expiry'], 
+            payload['attachments_json']
         ))
         
         conn.commit()
         conn.close()
-        return record_hash
+        return recalculated_hash
 
-    def update_asset_status(self, crypto_engine, target_hash: str, action: str = "CONSUMED"):
+
+    def prepare_status_update(self, target_hash: str, action: str = "SCRAPPED", metadata: str = "") -> dict:
+        """
+        准备状态变更数据包，返回供前端签名使用的指纹
+        """
         dummy_path = os.path.join(self.image_dir, "system_action.jpg")
         if not os.path.exists(dummy_path):
             with open(dummy_path, "wb") as f: f.write(b"SYSTEM_ACTION")
-        return self.add_asset_record(
-            crypto_engine,
+            
+        note_content = f"[STATUS_UPDATE] {target_hash} | {action} | {metadata}" if action != "CONSUMED" else f"[STATUS_UPDATE] {target_hash} | SCRAPPED | Legacy Consumed"
+
+        # 调用已有的准备逻辑，不进行签名和入库
+        prepared_data = self.prepare_asset_record(
             category="SYSTEM",
             name="STATUS_UPDATE",
             quantity=0,
             price=0.0,
-            note=f"[{action}] {target_hash}",
+            note=note_content,
             image_paths=[dummy_path]
         )
+        
+        return prepared_data

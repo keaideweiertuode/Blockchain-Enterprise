@@ -9,8 +9,6 @@ storage:
 # 密钥管理
 security:
   public_key: "keys/public.key"
-  private_key: "/media/ian/D/private.key"  # 管理员模式下必填
-  allow_audit_mode: true         # 是否允许在缺失私钥时启动审计模式
 
 # 接口配置
 server:
@@ -21,7 +19,7 @@ server:
 
 # 业务规则
 business:
-  pagination_size: 10
+  pagination_size: 6
   allowed_categories:
     - "固定资产"
     - "办公耗材"

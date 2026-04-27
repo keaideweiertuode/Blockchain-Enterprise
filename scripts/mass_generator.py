@@ -69,8 +69,8 @@ def generate_test_data(num_records=15):
         dummy_images = [create_dummy_image(upload_temp_dir, f"test_{i}") for _ in range(random.randint(1, 2))]
         
         try:
-            record_hash = ledger.add_asset_record(
-                crypto_engine=crypto,
+            # 1. 准备数据
+            prepared_data = ledger.prepare_asset_record(
                 category=cat,
                 name=name,
                 quantity=qty,
@@ -81,8 +81,19 @@ def generate_test_data(num_records=15):
                 expiry="",
                 image_paths=dummy_images
             )
-            print(f"[{i+1}/{num_records}] ✅ 上链成功: {name} (Hash: {record_hash[:8]}...)")
+            
+            record_hash = prepared_data['record_hash']
+            payload = prepared_data['payload']
+            
+            # 2. 本地签名
+            signature_hex = crypto.sign_data(record_hash)
+            
+            # 3. 提交上链
+            final_hash = ledger.commit_asset_record(payload, signature_hex)
+            
+            print(f"[{i+1}/{num_records}] ✅ 上链成功: {name} (Hash: {final_hash[:8]}...)")
             success_count += 1
+
             
             # 清理临时文件
             for img in dummy_images:
