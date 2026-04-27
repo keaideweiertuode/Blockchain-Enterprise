@@ -3,7 +3,7 @@ import yaml
 import sqlite3
 
 def init_db():
-    print("🛠️ 正在初始化 Blockchain Enterprise 数据库...")
+    print("🛠️ 正在初始化 Blockchain Enterprise 部署环境...")
     
     # 读取配置
     config_path = os.path.join(os.path.dirname(__file__), "config", "settings.yaml")
@@ -11,7 +11,23 @@ def init_db():
         config = yaml.safe_load(f)
         
     db_path = config['storage']['db_path']
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    image_dir = config['storage']['image_dir']
+    upload_temp_dir = config['storage']['upload_temp_dir']
+    log_file = config['server'].get('log_file', 'storage/audit.log')
+    
+    # 1. 自动创建所有必要的物理目录
+    dirs_to_create = [
+        os.path.dirname(db_path),
+        image_dir,
+        upload_temp_dir,
+        os.path.dirname(log_file),
+        "keys"
+    ]
+    
+    for d in dirs_to_create:
+        if d and not os.path.exists(d):
+            print(f"📁 创建目录: {d}")
+            os.makedirs(d, exist_ok=True)
     
     conn = sqlite3.connect(db_path)
     c = conn.cursor()

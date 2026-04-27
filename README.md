@@ -75,12 +75,22 @@ source venv/bin/activate
 # 安装依赖
 pip install -r requirements.txt
 ```
-
 ### 2. 初始化与配置
-1.  **生成凭证**：运行 `python generate_key.py` 在 `keys/` 下生成公私钥对（请妥善保管您的 `private.key`，建议存入物理 U 盘）。
-2.  **管理员账号**：系统预置 `admin / admin123`。首次登录强制要求绑定 TOTP (Google Authenticator)。
-3.  **用户管理**：登录后可进入 **“用户管理”** 页面直接创建普通员工或审计员账号。
+1.  **生成凭证**：运行 `python generate_key.py`。系统会自动创建 `keys/` 目录并生成 12 位助记词及公私钥文件。
+2.  **初始化环境与数据库**：运行 `python init_db.py`。该脚本会自动创建所有依赖目录（`database/`, `images/`, `storage/`, `uploads/`）并初始化账本数据库。
+3.  **管理员账号**：系统预置 `admin / admin123`。首次登录强制要求绑定 TOTP (Google Authenticator)。
+4.  **用户管理**：登录后可进入 **“用户管理”** 页面直接创建普通员工或审计员账号。
 
+---
+
+## 💾 数据持久化与备份 (Persistence)
+根据 `.gitignore` 的配置，以下目录包含系统运行产生的核心数据，**不会被提交到代码仓库**，请务必定期备份：
+*   **`database/`**：包含 `ledger.db`（账本、用户、2FA 密钥）。
+*   **`images/`**：包含所有上链资产的物理分片凭证。
+*   **`keys/`**：包含系统公钥。
+*   **`storage/`**：包含审计日志 `audit.log`。
+
+---
 ### 3. 启动服务 (生产模式)
 ```bash
 export PYTHONPATH=$PYTHONPATH:.
