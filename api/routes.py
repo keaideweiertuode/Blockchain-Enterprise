@@ -216,6 +216,7 @@ def register_routes(app, ledger, crypto, auditor, auth, config):
             location = request.form.get("location", "未标记")
             warranty = request.form.get("warranty", "")
             expiry = request.form.get("expiry", "")
+            split_assets = request.form.get("split_assets") == "yes"
             
             files = request.files.getlist("images")
             os.makedirs(UPLOAD_TEMP_DIR, exist_ok=True)
@@ -233,7 +234,10 @@ def register_routes(app, ledger, crypto, auditor, auth, config):
             if not saved_paths:
                 return jsonify({"status": "error", "message": "至少需要上传一张图片"}), 400
 
-            prepared_data = ledger.prepare_asset_record(
+            count = quantity if split_assets and quantity > 1 else 1
+            
+            tasks = ledger.prepare_batch_asset_records(
+                count=count,
                 category=category,
                 name=name,
                 quantity=quantity,
@@ -247,8 +251,7 @@ def register_routes(app, ledger, crypto, auditor, auth, config):
             
             return jsonify({
                 "status": "success", 
-                "record_hash": prepared_data['record_hash'],
-                "payload": prepared_data['payload']
+                "tasks": tasks
             })
             
         except Exception as e:
@@ -291,6 +294,38 @@ def register_routes(app, ledger, crypto, auditor, auth, config):
         except Exception as e:
             # 失败兜底清理
             for p in payload.get('temp_image_paths', []):
+                if os.path.exists(p): os.remove(p)
+            return jsonify({"status": "error", "message": str(e)}), 500
+
+    @app.route("/api/assets/commit_batch", methods=["POST"])
+    def commit_asset_batch():
+        """第二阶段：接收批量签名，验证后原子入库"""
+        if session.get('user', {}).get('role') not in ['SUPER_ADMIN', 'MANAGER']:
+            return jsonify({"status": "error", "message": "权限不足"}), 403
+            
+        data = request.json
+        tasks = data.get('tasks', [])
+        
+        if not tasks:
+            return jsonify({"status": "error", "message": "缺少必要的数据或签名"}), 400
+            
+        # 1. 批量验证签名
+        for task in tasks:
+            if not crypto.verify_signature(task.get('record_hash'), task.get('signature')):
+                # 签名不合法，清理临时图片
+                for p in tasks[0].get('payload', {}).get('temp_image_paths', []):
+                    if os.path.exists(p): os.remove(p)
+                return jsonify({"status": "error", "message": "签名验证失败，拒绝上链"}), 403
+                
+        try:
+            # 2. 验证通过，执行入库
+            final_hashes = ledger.commit_batch_asset_records(tasks)
+            
+            flash(f"已批量上链! 共 {len(final_hashes)} 条记录。", "success")
+            return jsonify({"status": "success", "message": "批量入库成功", "hashes": final_hashes})
+        except Exception as e:
+            # 失败兜底清理
+            for p in tasks[0].get('payload', {}).get('temp_image_paths', []):
                 if os.path.exists(p): os.remove(p)
             return jsonify({"status": "error", "message": str(e)}), 500
 

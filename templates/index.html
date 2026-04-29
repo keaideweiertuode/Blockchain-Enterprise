@@ -141,6 +141,10 @@
                                 <div class="col-6"><label class="form-label text-muted small fw-bold mb-1">数量</label><input type="number" class="form-control bg-light border-0" name="quantity" required></div>
                                 <div class="col-6"><label class="form-label text-muted small fw-bold mb-1">价格</label><input type="number" step="0.01" class="form-control bg-light border-0" name="price" required></div>
                             </div>
+                            <div class="mb-3 form-check ps-4">
+                                <input type="checkbox" class="form-check-input" id="splitAssetsCheck" name="split_assets" value="yes" checked>
+                                <label class="form-check-label text-muted small fw-bold" for="splitAssetsCheck">独立编号入库 (按数量生成独立资产)</label>
+                            </div>
                             <div class="mb-3"><label class="form-label text-muted small fw-bold mb-1">空间位置 (如: A区3号架)</label><input type="text" class="form-control bg-light border-0" name="location"></div>
                             <div class="row mb-3 g-2">
                                 <div class="col-6"><label class="form-label text-muted small fw-bold mb-1">过保日期</label><input type="date" class="form-control bg-light border-0" name="warranty"></div>
@@ -397,6 +401,7 @@
     // 存储从准备阶段返回的待签名数据
     let pendingPayload = null;
     let pendingRecordHash = null;
+    let pendingTasks = null;
 
     // 将十六进制字符串转为 Uint8Array
     function hexToUint8Array(hexString) {
@@ -440,11 +445,16 @@
             const data = await response.json();
             
             if (data.status === 'success') {
-                pendingPayload = data.payload;
-                pendingRecordHash = data.record_hash;
+                pendingTasks = data.tasks;
+                pendingPayload = null;
+                pendingRecordHash = null;
                 
                 // 显示弹窗并展示指纹
-                document.getElementById('fingerprintDisplay').innerText = pendingRecordHash.substring(0, 32) + "...";
+                if (pendingTasks.length > 1) {
+                    document.getElementById('fingerprintDisplay').innerText = `批量处理 ${pendingTasks.length} 个独立资产...`;
+                } else {
+                    document.getElementById('fingerprintDisplay').innerText = pendingTasks[0].record_hash.substring(0, 32) + "...";
+                }
                 const signModal = new bootstrap.Modal(document.getElementById('signModal'));
                 signModal.show();
             } else {
@@ -494,29 +504,51 @@
                 }
 
                 // 将要签名的 hash 字符串转为字节数组
-                const messageBytes = stringToUint8Array(pendingRecordHash);
-                
-                // 本地执行签名计算！
-                const signatureBytes = nacl.sign.detached(messageBytes, secretKey);
-                const signatureHex = uint8ArrayToHex(signatureBytes);
+                if (pendingTasks && pendingTasks.length > 0) {
+                    for (let task of pendingTasks) {
+                        const messageBytes = stringToUint8Array(task.record_hash);
+                        const signatureBytes = nacl.sign.detached(messageBytes, secretKey);
+                        task.signature = uint8ArrayToHex(signatureBytes);
+                    }
 
-                // 3. 提交上链阶段
-                const commitResponse = await fetch('/api/assets/commit', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        payload: pendingPayload,
-                        record_hash: pendingRecordHash,
-                        signature: signatureHex
-                    })
-                });
+                    const commitResponse = await fetch('/api/assets/commit_batch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ tasks: pendingTasks })
+                    });
 
-                const commitData = await commitResponse.json();
-                if (commitData.status === 'success') {
-                    // 强制刷新页面显示新数据
-                    window.location.reload();
-                } else {
-                    alert("上链被拒绝：" + commitData.message);
+                    const commitData = await commitResponse.json();
+                    if (commitData.status === 'success') {
+                        // 强制刷新页面显示新数据
+                        window.location.reload();
+                    } else {
+                        alert("批量上链被拒绝：" + commitData.message);
+                    }
+                } else if (pendingPayload && pendingRecordHash) {
+                    const messageBytes = stringToUint8Array(pendingRecordHash);
+                    
+                    // 本地执行签名计算！
+                    const signatureBytes = nacl.sign.detached(messageBytes, secretKey);
+                    const signatureHex = uint8ArrayToHex(signatureBytes);
+
+                    // 3. 提交上链阶段
+                    const commitResponse = await fetch('/api/assets/commit', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            payload: pendingPayload,
+                            record_hash: pendingRecordHash,
+                            signature: signatureHex
+                        })
+                    });
+
+                    const commitData = await commitResponse.json();
+                    if (commitData.status === 'success') {
+                        // 强制刷新页面显示新数据
+                        window.location.reload();
+                    } else {
+                        alert("上链被拒绝：" + commitData.message);
+                    }
                 }
 
             } catch (error) {
@@ -583,6 +615,7 @@
             if (data.status === 'success') {
                 pendingPayload = data.payload;
                 pendingRecordHash = data.record_hash;
+                pendingTasks = null;
                 
                 bootstrap.Modal.getInstance(document.getElementById('statusModal')).hide();
                 

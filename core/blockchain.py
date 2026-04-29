@@ -236,6 +236,76 @@ class EnterpriseLedger:
             }
         }
 
+    def prepare_batch_asset_records(self, count: int, **kwargs) -> list:
+        """
+        批量准备数据。返回一个列表，包含多个待上链数据包。
+        如果在前端开启了“独立编号入库”，则此处的 count=quantity，而实际记录的 quantity=1。
+        如果 count=1，就是普通的单体记录准备。
+        """
+        current_prev_hash = self.get_last_hash()
+        
+        # 1. 计算图片哈希 (只算一次)
+        individual_hashes = []
+        for path in kwargs.get('image_paths', []):
+            if os.path.exists(path):
+                img_hash = self._get_file_hash(path)
+                individual_hashes.append(img_hash)
+            
+        image_root_hash = self._calculate_merkle_root(individual_hashes)
+        attachments_json = json.dumps(individual_hashes)
+        
+        # 2. 数据规范化
+        safe_note = str(kwargs.get('note', ''))
+        safe_location = str(kwargs.get('location', ''))
+        safe_warranty = str(kwargs.get('warranty', ''))
+        safe_expiry = str(kwargs.get('expiry', ''))
+        
+        # 对于独立入库，每条记录的数量强行设为 1
+        str_quantity = "1" if count > 1 else str(kwargs.get('quantity'))
+        str_price = str(kwargs.get('price'))
+        
+        tasks = []
+        for i in range(count):
+            timestamp = datetime.now().isoformat()
+            
+            data_fields = [
+                str(kwargs.get('category')), str(kwargs.get('name')), str_quantity, 
+                str_price, safe_note, timestamp, 
+                current_prev_hash, image_root_hash, safe_location,
+                safe_warranty, safe_expiry
+            ]
+            data_string = "".join(data_fields)
+            record_hash = hashlib.sha256(data_string.encode()).hexdigest()
+            
+            # 只在第一个任务里带上 temp_image_paths，防止批量提交时重复移动文件
+            temp_paths = kwargs.get('image_paths', []) if i == 0 else []
+            
+            payload = {
+                "category": str(kwargs.get('category')),
+                "name": str(kwargs.get('name')),
+                "quantity": str_quantity,
+                "price": str_price,
+                "note": safe_note,
+                "timestamp": timestamp,
+                "previous_hash": current_prev_hash,
+                "image_root_hash": image_root_hash,
+                "location": safe_location,
+                "warranty": safe_warranty,
+                "expiry": safe_expiry,
+                "attachments_json": attachments_json,
+                "temp_image_paths": temp_paths
+            }
+            
+            tasks.append({
+                "record_hash": record_hash,
+                "payload": payload
+            })
+            
+            # 下一个块的 previous_hash 是当前的 record_hash
+            current_prev_hash = record_hash
+            
+        return tasks
+
     def commit_asset_record(self, payload: dict, signature_hex: str) -> bool:
         """
         第二阶段：确认上链
@@ -295,6 +365,75 @@ class EnterpriseLedger:
         conn.close()
         return recalculated_hash
 
+    def commit_batch_asset_records(self, tasks: list) -> list:
+        """
+        批量确认上链。
+        接收前端传回的任务数组，其中每个任务包含 payload 和 signature。
+        """
+        conn = self._get_conn()
+        c = conn.cursor()
+        
+        final_hashes = []
+        try:
+            for task in tasks:
+                payload = task['payload']
+                signature_hex = task['signature']
+                
+                # 1. 再次重构数据字符串
+                data_fields = [
+                    str(payload['category']), str(payload['name']), str(payload['quantity']), 
+                    str(payload['price']), str(payload['note']), str(payload['timestamp']), 
+                    str(payload['previous_hash']), str(payload['image_root_hash']), 
+                    str(payload['location']), str(payload['warranty']), str(payload['expiry'])
+                ]
+                data_string = "".join(data_fields)
+                recalculated_hash = hashlib.sha256(data_string.encode()).hexdigest()
+                
+                # 2. 转移并分片存储图片 (仅处理有 temp_image_paths 的首个 payload)
+                temp_paths = payload.get('temp_image_paths', [])
+                if temp_paths:
+                    if isinstance(payload.get('attachments_json'), str):
+                        hashes = json.loads(payload['attachments_json'])
+                    else:
+                        hashes = payload.get('attachments_json', [])
+                        
+                    for i, path in enumerate(temp_paths):
+                        if os.path.exists(path) and i < len(hashes):
+                            img_hash = hashes[i]
+                            prefix = img_hash[:2]
+                            shard_dir = os.path.join(self.image_dir, prefix)
+                            os.makedirs(shard_dir, exist_ok=True)
+                            final_path = os.path.join(shard_dir, f"{img_hash}.jpg")
+                            # 即使存在也强制覆盖或者跳过。由于文件哈希一样，可以直接复制
+                            import shutil
+                            shutil.copy(path, final_path)
+                            os.remove(path) # 清理临时文件
+
+                # 3. 数据库持久化
+                c.execute("""
+                    INSERT INTO records (
+                        category, item_name, quantity, price, note, timestamp, 
+                        previous_hash, image_hash, record_hash, signature,
+                        location, warranty_date, expiry_date, attachments
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    payload['category'], payload['name'], payload['quantity'], 
+                    payload['price'], payload['note'], payload['timestamp'], 
+                    payload['previous_hash'], payload['image_root_hash'], 
+                    recalculated_hash, signature_hex,
+                    payload['location'], payload['warranty'], payload['expiry'], 
+                    payload.get('attachments_json', '[]')
+                ))
+                final_hashes.append(recalculated_hash)
+            
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+            
+        return final_hashes
 
     def prepare_status_update(self, target_hash: str, action: str = "SCRAPPED", metadata: str = "") -> dict:
         """
